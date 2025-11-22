@@ -1,8 +1,5 @@
 {
   "rewrites": [
     { "source": "/(.*)", "destination": "/index.html" }
-  ],
-  "static": {
-    "exclude": ["*.js", "*.css", "*.png", "*.jpg", "*.svg"]
-  }
+  ]
 }
