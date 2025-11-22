@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Heart, Calendar, MessageCircle, Plus, Clock, Trash2, Phone, Activity, Coffee, Book, Music, Moon, Sun, Mic, MicOff, Volume2 } from 'lucide-react';
-const GEMINI_API_KEY = 'AIzaSyBAHLQlj8OAdsyUfQuG5g3n7R4INekKhPw'; // 👈 SUBSTITUA isso pela sua chave!
+const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 // Declaração de tipos para a API de storage do Claude
 declare global {
     interface Window {
