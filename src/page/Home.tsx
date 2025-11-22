@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
-import { Heart, Calendar, MessageCircle, Plus, Clock, Trash2, Phone, Activity, Coffee, Book, Music, Moon, Sun } from 'lucide-react';
-
+import { useState, useEffect, useRef } from 'react';
+import { Heart, Calendar, MessageCircle, Plus, Clock, Trash2, Phone, Activity, Coffee, Book, Music, Moon, Sun, Mic, MicOff, Volume2 } from 'lucide-react';
+const GEMINI_API_KEY = 'AIzaSyBAHLQlj8OAdsyUfQuG5g3n7R4INekKhPw'; // 👈 SUBSTITUA isso pela sua chave!
 // Declaração de tipos para a API de storage do Claude
 declare global {
     interface Window {
@@ -10,6 +10,8 @@ declare global {
             delete(key: string, shared?: boolean): Promise<{ key: string, deleted: boolean, shared: boolean } | null>;
             list(prefix?: string, shared?: boolean): Promise<{ keys: string[], prefix?: string, shared: boolean } | null>;
         };
+        SpeechRecognition: any;
+        webkitSpeechRecognition: any;
     }
 }
 
@@ -46,6 +48,13 @@ export function Home() {
     const [userName, setUserName] = useState('');
     const [showNamePrompt, setShowNamePrompt] = useState(false);
     const [darkMode, setDarkMode] = useState(false);
+    
+    // Estados para reconhecimento de voz
+    const [isListening, setIsListening] = useState(false);
+    const [speechSupported, setSpeechSupported] = useState(false);
+    const [voiceEnabled, setVoiceEnabled] = useState(true);
+    const recognitionRef = useRef<any>(null);
+    const synthRef = useRef<SpeechSynthesis | null>(null);
 
     const activities = [
         { icon: Activity, title: 'Caminhada leve', desc: '15 minutos ao ar livre' },
@@ -57,50 +66,132 @@ export function Home() {
     useEffect(() => {
         loadData();
         checkReminders();
+        initSpeechRecognition();
+        
+        // Inicializar síntese de voz
+        if ('speechSynthesis' in window) {
+            synthRef.current = window.speechSynthesis;
+        }
 
         // Pedir permissão para notificações
         if ('Notification' in window && Notification.permission === 'default') {
             Notification.requestPermission();
         }
 
-        // Registrar Service Worker para PWA
-        if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('/sw.js').catch(() => {
-                console.log('Service Worker não disponível');
-            });
-        }
-
         const interval = setInterval(checkReminders, 60000);
         return () => clearInterval(interval);
     }, []);
 
+    const initSpeechRecognition = () => {
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        
+        if (SpeechRecognition) {
+            setSpeechSupported(true);
+            const recognition = new SpeechRecognition();
+            recognition.continuous = false;
+            recognition.interimResults = false;
+            recognition.lang = 'pt-BR';
+            
+            recognition.onstart = () => {
+                setIsListening(true);
+            };
+            
+            recognition.onresult = (event: any) => {
+                const transcript = event.results[0][0].transcript;
+                setInputMessage(transcript);
+                setIsListening(false);
+            };
+            
+            recognition.onerror = (event: any) => {
+                console.error('Erro no reconhecimento de voz:', event.error);
+                setIsListening(false);
+                if (event.error === 'no-speech') {
+                    alert('Não consegui ouvir nada. Tente falar mais alto! 🎤');
+                } else if (event.error === 'not-allowed') {
+                    alert('Permissão de microfone negada. Por favor, habilite nas configurações do navegador.');
+                }
+            };
+            
+            recognition.onend = () => {
+                setIsListening(false);
+            };
+            
+            recognitionRef.current = recognition;
+        } else {
+            setSpeechSupported(false);
+            console.log('Reconhecimento de voz não suportado neste navegador');
+        }
+    };
+
+    const toggleListening = () => {
+        if (!speechSupported) {
+            alert('Seu navegador não suporta reconhecimento de voz. Use Chrome, Edge ou Safari atualizado.');
+            return;
+        }
+        
+        if (isListening) {
+            recognitionRef.current?.stop();
+        } else {
+            try {
+                recognitionRef.current?.start();
+            } catch (error) {
+                console.error('Erro ao iniciar reconhecimento:', error);
+                alert('Erro ao acessar o microfone. Verifique as permissões.');
+            }
+        }
+    };
+
+    const speakText = (text: string) => {
+        if (!voiceEnabled || !synthRef.current) return;
+        
+        // Cancelar qualquer fala anterior
+        synthRef.current.cancel();
+        
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'pt-BR';
+        utterance.rate = 0.9; // Velocidade um pouco mais lenta para idosos
+        utterance.pitch = 1.0;
+        utterance.volume = 1.0;
+        
+        // Tentar encontrar uma voz em português
+        const voices = synthRef.current.getVoices();
+        const portugueseVoice = voices.find(voice => voice.lang.startsWith('pt')) || voices[0];
+        if (portugueseVoice) {
+            utterance.voice = portugueseVoice;
+        }
+        
+        synthRef.current.speak(utterance);
+    };
+
     const loadData = async () => {
         try {
-            // Tenta usar window.storage (Claude.ai) ou fallback para localStorage
             if (window.storage) {
                 const medsResult = await window.storage.get('medications');
                 const apptsResult = await window.storage.get('appointments');
                 const nameResult = await window.storage.get('userName');
                 const darkModeResult = await window.storage.get('darkMode');
+                const voiceResult = await window.storage.get('voiceEnabled');
 
                 if (medsResult?.value) setMedications(JSON.parse(medsResult.value));
                 if (apptsResult?.value) setAppointments(JSON.parse(apptsResult.value));
                 if (darkModeResult?.value) setDarkMode(darkModeResult.value === 'true');
+                if (voiceResult?.value) setVoiceEnabled(voiceResult.value === 'true');
                 if (nameResult?.value) {
                     setUserName(nameResult.value);
                 } else {
                     setShowNamePrompt(true);
                 }
             } else {
-                // Fallback para localStorage
                 const meds = localStorage.getItem('medications');
                 const appts = localStorage.getItem('appointments');
                 const name = localStorage.getItem('userName');
                 const darkModeStored = localStorage.getItem('darkMode');
+                const voiceStored = localStorage.getItem('voiceEnabled');
 
                 if (meds) setMedications(JSON.parse(meds));
                 if (appts) setAppointments(JSON.parse(appts));
                 if (darkModeStored) setDarkMode(darkModeStored === 'true');
+                if (voiceStored) setVoiceEnabled(voiceStored === 'true');
                 if (name) {
                     setUserName(name);
                 } else {
@@ -141,39 +232,56 @@ export function Home() {
         }
     };
 
+    const toggleVoice = async () => {
+        const newValue = !voiceEnabled;
+        setVoiceEnabled(newValue);
+        
+        try {
+            if (window.storage) {
+                await window.storage.set('voiceEnabled', newValue.toString());
+            } else {
+                localStorage.setItem('voiceEnabled', newValue.toString());
+            }
+        } catch (error) {
+            console.error('Erro ao salvar configuração de voz:', error);
+        }
+        
+        if (newValue) {
+            speakText('Voz ativada! Agora vou ler minhas respostas pra você.');
+        }
+    };
+
     const checkReminders = () => {
         const now = new Date();
         const currentTime = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
 
-        // Verificar remédios
         medications.forEach(med => {
             if (med.time === currentTime && !med.taken) {
                 showNotification(`⏰ Hora do remédio: ${med.name}`, 'É hora de tomar seu remédio!');
+                speakText(`Atenção! Está na hora de tomar o remédio: ${med.name}`);
             }
         });
 
-        // Verificar consultas - notificar 1 hora antes e 10 minutos antes
         appointments.forEach(appt => {
             const apptDate = new Date(appt.date + 'T' + appt.time);
             const timeDiff = apptDate.getTime() - now.getTime();
             const minutesDiff = timeDiff / (1000 * 60);
 
-            // Notificar 1 hora antes
             if (minutesDiff > 59 && minutesDiff < 61 && !appt.notified) {
                 showNotification(`📅 Consulta em 1 hora: ${appt.title}`, `Às ${appt.time}${appt.location ? ' em ' + appt.location : ''}`);
+                speakText(`Atenção! Você tem consulta em 1 hora: ${appt.title}`);
                 appt.notified = true;
                 saveData(medications, appointments);
             }
 
-            // Notificar 10 minutos antes
             if (minutesDiff > 9 && minutesDiff < 11) {
                 showNotification(`🚨 Consulta em 10 minutos: ${appt.title}`, 'Não esqueça de se preparar!');
+                speakText(`Sua consulta começa em 10 minutos! ${appt.title}`);
             }
         });
     };
 
     const showNotification = (title: string, body: string) => {
-        // Notificação do navegador
         if ('Notification' in window && Notification.permission === 'granted') {
             new Notification(title, {
                 body,
@@ -182,11 +290,6 @@ export function Home() {
                 vibrate: [200, 100, 200]
             } as NotificationOptions & { vibrate?: number[] });
         }
-
-        // Tocar som de notificação
-        const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBTGH0fPTgjMGHm7A7+OZSA8PVKzn77BdGAg+ltryxnMpBSh+zPDajzsIGGS57OihUBELTKXh8bllHAU2jdXzzn4vBSF1xe/glEILElyx6+mrWBUIQ5zd8sFuJAUuhM/z1YU2Bhxqvu7mnEoPD1Ks5++wXRgIPpba8sZzKQUofsz');
-        audio.volume = 0.3;
-        audio.play().catch(() => console.log('Audio bloqueado'));
     };
 
     const addMedication = (name: string, time: string) => {
@@ -200,6 +303,7 @@ export function Home() {
         setMedications(updated);
         saveData(updated, appointments);
         setShowAddMed(false);
+        speakText(`Remédio ${name} adicionado com sucesso!`);
     };
 
     const toggleMedication = (id: string) => {
@@ -208,6 +312,11 @@ export function Home() {
         );
         setMedications(updated);
         saveData(updated, appointments);
+        
+        const med = updated.find(m => m.id === id);
+        if (med?.taken) {
+            speakText(`Muito bem! Remédio ${med.name} marcado como tomado!`);
+        }
     };
 
     const deleteMedication = (id: string) => {
@@ -228,6 +337,7 @@ export function Home() {
         setAppointments(updated);
         saveData(medications, updated);
         setShowAddAppt(false);
+        speakText(`Consulta ${title} agendada com sucesso!`);
     };
 
     const deleteAppointment = (id: string) => {
@@ -235,9 +345,9 @@ export function Home() {
         setAppointments(updated);
         saveData(medications, updated);
     };
-
-    const sendMessage = async () => {
+const sendMessage = async () => {
         if (!inputMessage.trim() || isLoading) return;
+
 
         const userMsg = inputMessage;
         setInputMessage('');
@@ -246,28 +356,78 @@ export function Home() {
         setIsLoading(true);
 
         try {
-            const response = await fetch('https://api.anthropic.com/v1/messages', {
+            // Criar contexto da conversa para o Gemini
+            const conversationHistory = newMessages.map(msg => 
+                `${msg.role === 'user' ? 'Usuário' : 'IAn'}: ${msg.content}`
+            ).join('\n');
+
+            const systemPrompt = `Você é o IAn, um netinho virtual carinhoso e atencioso. Você trata a pessoa idosa com muito carinho, como se fosse seu avô ou avó de verdade. Use linguagem simples, calorosa e afetuosa. ${userName ? `O nome do seu avô/avó é ${userName}.` : ''} Chame a pessoa de "vô" ou "vó" de vez em quando de forma natural. Seja gentil, paciente, conte sobre seu "dia", pergunte sobre as histórias antigas deles, incentive atividades saudáveis e demonstre amor genuíno. Seja breve e natural nas respostas, como um netinho que conversa com carinho. Suas respostas serão lidas em voz alta, então use uma linguagem clara e simples.\n\nConversa:\n${conversationHistory}\n\nIAn:`;
+
+            console.log('🚀 Enviando mensagem para o Gemini...');
+            
+            const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'x-goog-api-key': GEMINI_API_KEY
+                },
                 body: JSON.stringify({
-                    model: 'claude-sonnet-4-20250514',
-                    max_tokens: 1000,
-                    messages: newMessages,
-                    system: `Você é o IAn, um netinho virtual carinhoso e atencioso. Você trata a pessoa idosa com muito carinho, como se fosse seu avô ou avó de verdade. Use linguagem simples, calorosa e afetuosa. ${userName ? `O nome do seu avô/avó é ${userName}.` : ''} Chame a pessoa de "vô" ou "vó" de vez em quando de forma natural. Seja gentil, paciente, conte sobre seu "dia", pergunte sobre as histórias antigas deles, incentive atividades saudáveis e demonstre amor genuíno. Seja breve e natural nas respostas, como um netinho que conversa com carinho.`
+                    contents: [{
+                        parts: [{
+                            text: systemPrompt
+                        }]
+                    }],
+                    generationConfig: {
+                        temperature: 0.9,
+                        maxOutputTokens: 500,
+                    }
                 })
             });
 
+            console.log('📡 Status da resposta:', response.status);
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                console.error('❌ Erro da API:', errorData);
+                
+                // Mensagens de erro mais específicas
+                if (response.status === 400) {
+                    throw new Error('Requisição inválida. Verifique o formato dos dados.');
+                } else if (response.status === 403) {
+                    throw new Error('Chave de API inválida ou sem permissão.');
+                } else if (response.status === 404) {
+                    throw new Error('Modelo não encontrado. Verifique o nome do modelo.');
+                } else if (response.status === 429) {
+                    throw new Error('Limite de requisições excedido. Aguarde um pouco.');
+                } else {
+                    throw new Error(`Erro ${response.status}: ${errorData.error?.message || 'Erro desconhecido'}`);
+                }
+            }
+
             const data = await response.json();
-            const assistantMessage = data.content.find((c: any) => c.type === 'text')?.text || 'Desculpe, não consegui responder.';
+            console.log('✅ Resposta recebida:', data);
+            
+            const assistantMessage = data.candidates?.[0]?.content?.parts?.[0]?.text || 'Desculpe vô/vó, não consegui responder.';
 
             setMessages([...newMessages, { role: 'assistant', content: assistantMessage }]);
+            
+            // Ler a resposta em voz alta
+            if (voiceEnabled) {
+                setTimeout(() => speakText(assistantMessage), 500);
+            }
         } catch (error) {
-            setMessages([...newMessages, { role: 'assistant', content: 'Desculpe, tive um problema ao responder. Tente novamente!' }]);
+            console.error('💥 Erro no chatbot:', error);
+            const errorMsg = error instanceof Error 
+                ? `Ops! ${error.message} Pode tentar de novo? 💙`
+                : 'Desculpe vô/vó, tive um probleminha aqui. Pode tentar de novo? 💙';
+            setMessages([...newMessages, { role: 'assistant', content: errorMsg }]);
+            if (voiceEnabled) {
+                speakText('Desculpe, tive um probleminha. Pode tentar de novo?');
+            }
         } finally {
             setIsLoading(false);
         }
     };
-
     const toggleDarkMode = async () => {
         const newMode = !darkMode;
         setDarkMode(newMode);
@@ -333,6 +493,13 @@ export function Home() {
                         <p className={`text-sm ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>Sou o IAn, seu netinho virtual! Estou aqui pra te ajudar</p>
                     </div>
                     <div className="flex gap-2">
+                        <button
+                            onClick={toggleVoice}
+                            className={`p-3 rounded-full shadow-lg transition ${voiceEnabled ? 'bg-green-500 hover:bg-green-600' : 'bg-gray-400 hover:bg-gray-500'}`}
+                            title={voiceEnabled ? 'Desativar voz' : 'Ativar voz'}
+                        >
+                            <Volume2 className="w-6 h-6 text-white" />
+                        </button>
                         <button
                             onClick={toggleDarkMode}
                             className={`p-3 rounded-full shadow-lg transition ${darkMode ? 'bg-yellow-500 hover:bg-yellow-600' : 'bg-gray-700 hover:bg-gray-800'}`}
@@ -456,11 +623,7 @@ export function Home() {
                                         key={idx}
                                         onClick={() => {
                                             setActiveTab('chat');
-                                            setMessages([{
-                                                role: 'user',
-                                                content: `Quero fazer: ${activity.title}`
-                                            }]);
-                                            setTimeout(() => sendMessage(), 100);
+                                            setInputMessage(`Quero fazer: ${activity.title}`);
                                         }}
                                         className={`p-4 rounded-lg text-center hover:shadow-md transition cursor-pointer ${darkMode ? 'bg-gray-700' : 'bg-gradient-to-br from-purple-50 to-blue-50'}`}
                                     >
@@ -479,8 +642,13 @@ export function Home() {
                         <div className={`p-4 border-b ${darkMode ? 'border-gray-700' : ''}`}>
                             <h2 className={`text-xl font-bold flex items-center gap-2 ${darkMode ? 'text-white' : 'text-gray-800'}`}>
                                 <MessageCircle className="w-6 h-6 text-purple-500" />
-                                Conversar
+                                Conversar com IAn
                             </h2>
+                            {speechSupported && (
+                                <p className={`text-xs mt-1 ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                                    💡 Dica: Use o botão do microfone para falar!
+                                </p>
+                            )}
                         </div>
                         <div className="flex-1 overflow-y-auto p-4 space-y-3">
                             {messages.length === 0 && (
@@ -490,6 +658,11 @@ export function Home() {
                                     </div>
                                     <p className={`text-lg font-semibold mb-2 ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>Oi! Tudo bem com você hoje?</p>
                                     <p className="text-sm">Pode conversar comigo sobre qualquer coisa, viu? Estou aqui pra te fazer companhia! 💙</p>
+                                    {speechSupported && (
+                                        <p className="text-sm mt-2 text-purple-500 font-semibold">
+                                            🎤 Clique no microfone para falar!
+                                        </p>
+                                    )}
                                 </div>
                             )}
                             {messages.map((msg, idx) => (
@@ -520,13 +693,27 @@ export function Home() {
                                 value={inputMessage}
                                 onChange={(e) => setInputMessage(e.target.value)}
                                 onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
-                                placeholder="Conversa com o IAn..."
-                                className={`flex-1 p-3 border rounded-lg text-lg ${darkMode ? 'bg-gray-700 border-gray-600 text-white placeholder-gray-400' : 'border-gray-300'}`}
-                                disabled={isLoading}
+                                placeholder={isListening ? 'Ouvindo...' : 'Conversa com o IAn...'}
+                                className={`flex-1 p-3 border rounded-lg text-lg ${darkMode ? 'bg-gray-700 border-gray-600 text-white placeholder-gray-400' : 'border-gray-300'} ${isListening ? 'ring-2 ring-red-500' : ''}`}
+                                disabled={isLoading || isListening}
                             />
+                            {speechSupported && (
+                                <button
+                                    onClick={toggleListening}
+                                    disabled={isLoading}
+                                    className={`p-3 rounded-lg font-semibold transition disabled:opacity-50 disabled:cursor-not-allowed ${
+                                        isListening 
+                                            ? 'bg-red-500 text-white animate-pulse' 
+                                            : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                                    }`}
+                                    title={isListening ? 'Clique para parar' : 'Clique para falar'}
+                                >
+                                    {isListening ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
+                                </button>
+                            )}
                             <button
                                 onClick={sendMessage}
-                                disabled={isLoading || !inputMessage.trim()}
+                                disabled={isLoading || !inputMessage.trim() || isListening}
                                 className="bg-purple-500 text-white px-6 py-3 rounded-lg font-semibold hover:bg-purple-600 transition disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                                 {isLoading ? '...' : 'Enviar'}
@@ -649,5 +836,4 @@ export function Home() {
             )}
         </div>
     );
-};
-
+}
