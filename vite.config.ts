@@ -1,13 +1,24 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react-swc'
+import path from 'path'
 
 export default defineConfig({
   plugins: [react()],
-  base: './',
+  base: './',  // ← MUDANÇA IMPORTANTE
   build: {
     outDir: 'dist',
     assetsDir: 'assets',
-    emptyOutDir: true
-  }
+    emptyOutDir: true,
+    sourcemap: false,
+    rollupOptions: {
+      output: {
+        manualChunks: undefined,
+      },
+    },
+  },
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, './src'),
+    },
+  },
 })
-
